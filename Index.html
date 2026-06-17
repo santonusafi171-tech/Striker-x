@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STRIKER — Football Highlights Engine</title>
+<meta name="description" content="STRIKER — live football highlights platform. Powered by Firebase." />
+
+<!-- Tailwind via CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest"></script>
+
+<!-- GSAP -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+
+<!-- Google Fonts: Bebas Neue + Inter -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Firebase (Realtime DB only) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          pitch:    '#0A0F0D',
+          surface:  '#111714',
+          raised:   '#1A2118',
+          accent:   '#39FF14',
+          accentDim:'#1E8C0A',
+          danger:   '#FF3B3B'
+        },
+        fontFamily: {
+          display: ['Bebas Neue', 'sans-serif'],
+          body:    ['Inter', 'sans-serif']
+        }
+      }
+    }
+  }
+</script>
+
+<style>
+  :root {
+    --accent: #39FF14;
+    --accent-dim: #1E8C0A;
+  }
+  * { -webkit-tap-highlight-color: transparent; }
+  html, body {
+    background: #0A0F0D;
+    color: #e5e7eb;
+    font-family: 'Inter', sans-serif;
+    background-image:
+      radial-gradient(900px circle at 8% -10%, rgba(57,255,20,0.08), transparent 45%),
+      radial-gradient(700px circle at 95% 5%, rgba(123,44,191,0.10), transparent 45%),
+      radial-gradient(800px circle at 50% 110%, rgba(0,212,170,0.06), transparent 50%);
+    background-attachment: fixed;
+  }
+  body { overflow-x: hidden; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #0A0F0D; }
+  ::-webkit-scrollbar-thumb { background: #1E8C0A; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #39FF14; }
+
+  .font-display { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.02em; }
+
+  /* Stadium Pulse — broadcast noise */
+  .stadium-pulse::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/></svg>");
+    opacity: 0.06; mix-blend-mode: overlay; animation: pulse-noise 1.2s steps(4) infinite;
+  }
+  @keyframes pulse-noise {
+    0%   { transform: translate(0,0); }
+    25%  { transform: translate(-2%,1%); }
+    50%  { transform: translate(1%,-2%); }
+    75%  { transform: translate(-1%,2%); }
+    100% { transform: translate(0,0); }
+  }
+
+  /* Ticker Tape */
+  .ticker-track {
+    display: inline-flex; gap: 3rem; white-space: nowrap;
+    animation: ticker-scroll 38s linear infinite;
+  }
+  @keyframes ticker-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  .ticker-mask:hover .ticker-track { animation-play-state: paused; }
+
+  /* Goal Flash on cards */
+  .video-card {
+    transition: transform 0.3s cubic-bezier(.2,.8,.2,1), box-shadow 0.3s ease, border-color 0.3s ease;
+    will-change: transform;
+    box-shadow: 0 4px 14px -8px rgba(0,0,0,0.5);
+  }
+  .video-card:hover {
+    transform: translateY(-4px) scale(1.025);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 32px rgba(57,255,20,0.32), 0 22px 44px -10px rgba(0,0,0,0.65);
+  }
+  .video-card::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, transparent 0%, rgba(57,255,20,0) 100%);
+    background-size: 100% 200%; background-position: 0 -100%;
+    transition: background-position 0.6s cubic-bezier(.2,.8,.2,1);
+  }
+  .video-card:hover::after {
+    background: linear-gradient(180deg, rgba(57,255,20,0.18) 0%, transparent 60%);
+    background-position: 0 100%;
+  }
+
+  /* Scan line sweep on thumbnail */
+  .scan-line {
+    position: absolute; left: 0; right: 0; top: 0; height: 35%;
+    background: linear-gradient(180deg, rgba(57,255,20,0.55), rgba(57,255,20,0));
+    opacity: 0; transform: translateY(-120%);
+    pointer-events: none;
+  }
+  .video-card:hover .scan-line {
+    animation: scan-sweep 0.85s ease-out;
+  }
+  @keyframes scan-sweep {
+    0%   { opacity: 0; transform: translateY(-120%); }
+    20%  { opacity: 1; }
+    100% { opacity: 0; transform: translateY(320%); }
+  }
+
+  /* Scoreboard glow */
+  .league-badge {
+    animation: league-glow 3.2s ease-in-out infinite;
+  }
+  @keyframes league-glow {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    50%     { box-shadow: 0 0 14px 2px var(--glow, #39FF14); }
+  }
+
+  /* Magnetic button */
+  .magnetic { transition: transform 0.2s ease; }
+
+  /* Glassmorphism nav */
+  .glass-nav {
+    background: linear-gradient(180deg, rgba(15,22,18,0.85), rgba(10,15,13,0.55));
+    backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    border-bottom: 1px solid rgba(57,255,20,0.18);
+    box-shadow: 0 8px 24px -16px rgba(0,0,0,0.6);
+  }
+
+  /* The letter I with a bouncing ball as its dot */
+  .i-holder {
+    position: relative;
+    display: inline-block;
+    padding-top: 0.18em;
+  }
+  .ball-dot {
+    position: absolute;
+    top: -0.05em;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 9999px;
+    background: #39FF14;
+    box-shadow: 0 0 14px #39FF14, 0 0 4px #39FF14;
+    animation: ball-bounce 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes ball-bounce {
+    0%,100% { transform: translateX(-50%) translateY(0); }
+    50%     { transform: translateX(-50%) translateY(-7px); }
+  }
+
+  /* Long-press progress on the brand logo */
+  #brand .hold-track {
+    position: absolute;
+    left: 4px; right: 4px;
+    bottom: -6px;
+    height: 2px;
+    background: rgba(57,255,20,0.12);
+    border-radius: 9999px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  #brand .hold-track .hold-fill {
+    display: block;
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #39FF14, #00ffae);
+    box-shadow: 0 0 8px #39FF14;
+  }
+  #brand.holding .hold-track { opacity: 1; }
+  #brand .brand-gear {
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.3s ease;
+    transform: translateY(2px);
+  }
+  #brand:hover .brand-gear { opacity: 0.55; transform: translateY(0); }
+
+  /* Search underline expand */
+  .search-wrap input { transition: width 0.35s cubic-bezier(.2,.8,.2,1); width: 140px; }
+  .search-wrap input:focus { width: 280px; }
+  .search-wrap .underline-bar { transform: scaleX(0); transform-origin: left; transition: transform 0.3s ease; }
+  .search-wrap input:focus + .underline-bar { transform: scaleX(1); background: var(--accent); }
+
+  /* Pill active */
+  .pill { transition: all 0.25s ease; }
+  .pill.active {
+    background: var(--accent); color: #0A0F0D; font-weight: 700;
+    transform: translateY(-2px);
+    box-shadow: 0 0 16px rgba(57,255,20,0.55);
+  }
+
+  /* Card entrance — handled by GSAP stagger */
+
+  /* Login shake */
+  .shake { animation: shake-x 0.45s ease; }
+  @keyframes shake-x {
+    0%,100% { transform: translateX(0); }
+    20% { transform: translateX(-10px); }
+    40% { transform: translateX(10px); }
+    60% { transform: translateX(-5px); }
+    80% { transform: translateX(5px); }
+  }
+
+  /* Empty state ball bounce */
+  .bouncing-ball {
+    width: 28px; height: 28px; border-radius: 9999px; background: var(--accent);
+    box-shadow: 0 0 18px var(--accent);
+    animation: bounce-ball 1.2s ease-in-out infinite;
+  }
+  @keyframes bounce-ball {
+    0%,100% { transform: translateY(0) scale(1); }
+    50%     { transform: translateY(-26px) scale(1.05); }
+  }
+
+  /* Modal pop */
+  .modal-pop { animation: modal-pop 0.32s cubic-bezier(.2,.8,.2,1); }
+  @keyframes modal-pop { from { transform: scale(0.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .screen-shake { animation: shake-x 0.4s ease; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: #111714; border: 1px solid var(--accent); color: #e5e7eb;
+    padding: 12px 18px; border-radius: 10px; box-shadow: 0 0 24px rgba(57,255,20,0.3);
+    opacity: 0; transition: all 0.35s ease; z-index: 200;
+    font-family: 'Inter', sans-serif; font-weight: 600;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* Toggle switch */
+  .toggle { position: relative; width: 46px; height: 24px; background: #1A2118; border-radius: 9999px; border: 1px solid rgba(57,255,20,0.2); cursor: pointer; transition: background 0.25s; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 9999px; background: #6b7280; transition: all 0.25s; }
+  .toggle.on { background: rgba(57,255,20,0.25); border-color: var(--accent); }
+  .toggle.on::after { left: 24px; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+  /* Tag chip */
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 9999px;
+    background: rgba(57,255,20,0.08); color: #bdf2a6; font-size: 11px; border: 1px solid rgba(57,255,20,0.2);
+  }
+
+  /* Hide scrollbar on horizontal pill row */
+  .scroll-snap-x { scroll-snap-type: x mandatory; }
+  .scroll-snap-x > * { scroll-snap-align: start; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Hero gradient overlay */
+  .hero-overlay {
+    background:
+      linear-gradient(180deg, rgba(10,15,13,0.1) 0%, rgba(10,15,13,0.55) 55%, rgba(10,15,13,0.96) 100%),
+      linear-gradient(90deg, rgba(10,15,13,0.65) 0%, transparent 60%);
+  }
+
+  /* Sticky mobile ad */
+  .mobile-sticky-ad { position: fixed; bottom: 0; left: 0; right: 0; z-index: 90; }
+
+  /* Card play icon */
+  .play-icon-overlay {
+    transform: scale(0); transition: transform 0.5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .video-card:hover .play-icon-overlay { transform: scale(1); }
+
+  /* Loading spinner */
+  .spinner { border: 3px solid rgba(57,255,20,0.15); border-top-color: var(--accent); border-radius: 9999px; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Confetti canvas */
+  #confetti-canvas { position: fixed; inset: 0; pointer-events: none; z-index: 300; }
+
+  /* Smooth fade for route transitions */
+  .route-enter { animation: route-enter 0.4s cubic-bezier(.2,.8,.2,1); }
+  @keyframes route-enter { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Lucide icon size default */
+  [data-lucide] { width: 18px; height: 18px; stroke-width: 2; }
+
+  /* Inputs default */
+  input, select, textarea { font-family: 'Inter', sans-serif; }
+  input:focus, select:focus, textarea:focus { outline: none; box-shadow: 0 0 0 2px rgba(57,255,20,0.4); }
+
+  /* Watch iframe container */
+  .iframe-wrap { position: relative; padding-top: 56.25%; height: 0; overflow: hidden; border-radius: 12px; background: #000; }
+  .iframe-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body class="stadium-pulse bg-pitch text-gray-200 min-h-screen">
+
+<!-- ===================== NAVBAR ===================== -->
+<nav id="navbar" class="glass-nav sticky top-0 z-50 px-4 sm:px-6 py-3">
+  <div class="max-w-7xl mx-auto flex items-center gap-3 sm:gap-4">
+    <!-- Brand: long-press 5s to enter Admin -->
+    <div id="brand" role="button" tabindex="0"
+         class="flex items-center gap-1.5 select-none cursor-pointer group relative"
+         title="STRIKER — hold for 5 seconds to open Admin">
+      <span class="font-display text-3xl sm:text-4xl tracking-wide text-white leading-none drop-shadow-[0_0_12px_rgba(57,255,20,0.25)]">
+        STR<span class="i-holder">I<span class="ball-dot"></span></span>KER
+      </span>
+      <span class="brand-gear text-accent" title="Hold logo 5s for Admin">
+        <i data-lucide="settings" style="width:14px;height:14px;"></i>
+      </span>
+      <span class="hold-track"><span class="hold-fill"></span></span>
+    </div>
+
+    <div class="flex-1"></div>
+
+    <!-- Search -->
+    <div class="search-wrap relative flex items-center">
+      <i data-lucide="search" class="absolute left-2.5 text-gray-400"></i>
+      <input id="navSearch" type="text" placeholder="Search highlights..."
+        class="bg-raised/70 border border-white/10 rounded-full pl-8 pr-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-accent/40" />
+      <div class="underline-bar absolute left-2 right-2 bottom-0 h-px"></div>
+    </div>
+
+    <a href="#/" class="hidden sm:flex items-center gap-1 text-sm text-gray-300 hover:text-accent transition-colors">
+      <i data-lucide="home"></i> Home
+    </a>
+    <a href="#/admin" class="hidden sm:flex items-center gap-1 text-sm text-gray-300 hover:text-accent transition-colors">
+      <i data-lucide="lock"></i> Admin
+    </a>
+  </div>
+</nav>
+
+<!-- AD: Below navbar 728x90 -->
+<div class="max-w-3xl mx-auto my-2 px-2" data-ad-slot="below-nav">
+  <div data-ad-key="below-nav-728x90" class="ad-box bg-surface border border-white/5 rounded-lg flex items-center justify-center text-xs text-gray-500" style="height:90px;max-width:728px;width:100%;margin:0 auto;">
+    Ad · 728×90
+  </div>
+</div>
+
+<!-- ===================== TICKER TAPE ===================== -->
+<div id="ticker" class="ticker-mask relative overflow-hidden bg-surface/80 border-y border-accent/10 py-2 mt-1">
+  <div class="absolute left-0 top-0 bottom-0 z-10 px-2 flex items-center bg-accent text-pitch font-bold text-xs uppercase tracking-wider">
+    <i data-lucide="zap" style="width:14px;height:14px;"></i> LIVE
+  </div>
+  <div class="ticker-track pl-24" id="tickerTrack"></div>
+</div>
+
+<!-- ===================== MAIN ROUTE OUTLET ===================== -->
+<main id="app" class="max-w-7xl mx-auto px-4 sm:px-6 py-6 min-h-[60vh]"></main>
+
+<!-- ===================== MOBILE STICKY AD ===================== -->
+<div class="mobile-sticky-ad block sm:hidden" data-ad-slot="mobile-sticky">
+  <div data-ad-key="mobile-sticky-320x50" class="ad-box bg-surface border-t border-white/10 flex items-center justify-center text-[10px] text-gray-500" style="height:50px;">
+    Ad · 320×50
+  </div>
+</div>
+<div class="block sm:hidden h-[60px]"></div>
+
+<!-- TOAST -->
+<div id="toast" class="toast"></div>
+
+<!-- CONFETTI CANVAS -->
+<canvas id="confetti-canvas"></canvas>
+
+<script>
+/* ==========================================================
+   STRIKER — Football Highlights Engine
+   Single-file. Firebase RTDB. Vanilla JS.
+   ========================================================== */
+
+/* ---------- Firebase Config (USER FILLS THESE) ---------- */
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const ADMIN_PASSWORD = "striker2025"; // Change before deploy
+const DB_ROOT = "striker-videos";
+
+/* ---------- Leagues Constant ---------- */
+const LEAGUES = [
+  { name: "Premier League", color: "#3D195B", glow: "#7B2CBF" },
+  { name: "La Liga",        color: "#FF4500", glow: "#FF8C00" },
+  { name: "Serie A",        color: "#0057A8", glow: "#00A8E8" },
+  { name: "Bundesliga",     color: "#D20515", glow: "#FF4444" },
+  { name: "Ligue 1",        color: "#1E3A5F", glow: "#4A90E2" },
+  { name: "UCL",            color: "#1B3F6E", glow: "#00D4AA" },
+  { name: "UEL",            color: "#F5621C", glow: "#FFB347" },
+  { name: "World Cup",      color: "#006233", glow: "#00C853" },
+  { name: "AFCON",          color: "#009A44", glow: "#00E676" },
+  { name: "MLS",            color: "#002B5C", glow: "#448AFF" },
+  { name: "Other",          color: "#444444", glow: "#888888" }
+];
+const leagueMap = Object.fromEntries(LEAGUES.map(l => [l.name, l]));
+
+/* ---------- App State ---------- */
+const state = {
+  videos: [],            // [{id, ...}]
+  ready: false,
+  adminAuthed: false,
+  editingId: null
+};
+
+/* ---------- Firebase Init ---------- */
+let db = null, videosRef = null;
+function initFirebase() {
+  try {
+    if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "YOUR_API_KEY") {
+      console.warn("[STRIKER] Firebase config not set. Running in offline mode (admin can still add videos locally, but they won't sync).");
+      state.ready = true;
+      render();
+      return;
+    }
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    videosRef = db.ref(DB_ROOT);
+    videosRef.on('value', snap => {
+      const val = snap.val() || {};
+      state.videos = Object.entries(val).map(([id, v]) => ({ id, ...v }))
+        .sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+      state.ready = true;
+      render();
+      updateTicker();
+    }, err => {
+      console.error("[STRIKER] Firebase read error:", err);
+      showToast("Firebase connection error", "danger");
+      state.ready = true; render();
+    });
+  } catch (e) {
+    console.error("[STRIKER] Firebase init failed:", e);
+    state.ready = true; render();
+  }
+}
+
+/* ---------- Helpers ---------- */
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+const esc = (s='') => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDate = (s) => { if(!s) return ''; try { const d=new Date(s); return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}); } catch { return s; } };
+const timeAgo = (ts) => {
+  if (!ts) return '';
+  const sec = Math.floor((Date.now() - ts)/1000);
+  if (sec < 60) return sec + 's ago';
+  if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+  return Math.floor(sec/86400) + 'd ago';
+};
+const genId = () => 'v_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const debounce = (fn, ms=200) => { let t; return (...a) => { clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+
+function normalizeEmbedUrl(url) {
+  if (!url) return '';
+  url = url.trim();
+  // YouTube
+  const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([\w-]{11})/);
+  if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
+  // Vimeo
+  const vm = url.match(/vimeo\.com\/(\d+)/);
+  if (vm) return `https://player.vimeo.com/video/${vm[1]}`;
+  // Streamable
+  const sm = url.match(/streamable\.com\/([\w]+)/);
+  if (sm) return `https://streamable.com/e/${sm[1]}`;
+  // Dailymotion
+  const dm = url.match(/dailymotion\.com\/video\/([a-zA-Z0-9]+)/);
+  if (dm) return `https://www.dailymotion.com/embed/video/${dm[1]}`;
+  return url; // assume already embeddable
+}
+function isValidEmbedUrl(url) {
+  if (!url) return false;
+  return /youtube|youtu\.be|vimeo|streamable|dailymotion|player\.|embed|\.mp4|video/i.test(url);
+}
+
+function showToast(msg, type='success') {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.borderColor = type === 'danger' ? '#FF3B3B' : '#39FF14';
+  t.style.boxShadow = type === 'danger' ? '0 0 24px rgba(255,59,59,0.4)' : '0 0 24px rgba(57,255,20,0.3)';
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* ---------- Router ---------- */
+function route() {
+  const hash = location.hash || '#/';
+  const app = $('#app');
+  app.classList.remove('route-enter');
+  void app.offsetWidth; // reflow to restart animation
+  app.classList.add('route-enter');
+
+  // Routes
+  if (hash.startsWith('#/watch/')) {
+    const id = decodeURIComponent(hash.replace('#/watch/', ''));
+    return renderWatch(id);
+  }
+  if (hash.startsWith('#/search')) {
+    const q = new URLSearchParams(hash.split('?')[1] || '').get('q') || '';
+    return renderSearch(q);
+  }
+  if (hash.startsWith('#/category/')) {
+    const slug = decodeURIComponent(hash.replace('#/category/', ''));
+    return renderCategory(slug);
+  }
+  if (hash === '#/admin') {
+    if (state.adminAuthed) { location.hash = '#/admin/dashboard'; return; }
+    return renderAdminLogin();
+  }
+  if (hash === '#/admin/dashboard') {
+    if (!state.adminAuthed) { location.hash = '#/admin'; return; }
+    return renderAdminDashboard();
+  }
+  // default home
+  renderHome();
+}
+window.addEventListener('hashchange', route);
+
+/* ---------- Render: Ticker ---------- */
+function updateTicker() {
+  const track = $('#tickerTrack');
+  if (!track) return;
+  const latest = (state.videos || []).slice(0, 5);
+  if (latest.length === 0) {
+    track.innerHTML = `<span class="text-gray-500 text-sm">No highlights yet — admin can add the first clip.</span>`;
+    return;
+  }
+  const itemHTML = latest.map(v => `
+    <a href="#/watch/${encodeURIComponent(v.id)}" class="inline-flex items-center gap-2 text-sm text-gray-200 hover:text-accent transition-colors">
+      <span class="text-accent">⚽</span>
+      <span class="font-semibold uppercase">${esc(v.teams || v.title || 'Match')}</span>
+      <span class="text-gray-500">·</span>
+      <span class="text-gray-400">${esc(v.league || '')}</span>
+      <span class="text-gray-500">·</span>
+      <span class="text-gray-500">${timeAgo(v.createdAt)}</span>
+    </a>
+  `).join('');
+  // Duplicate for seamless scroll
+  track.innerHTML = itemHTML + itemHTML;
+}
+
+/* ---------- Render: Home ---------- */
+function renderHome() {
+  const app = $('#app');
+  const featured = (state.videos || []).find(v => v.featured) || null;
+  const others = (state.videos || []).filter(v => !featured || v.id !== featured.id);
+
+  app.innerHTML = `
+    ${featured ? renderHero(featured) : ''}
+    ${renderCategoryFilter()}
+    <section class="mt-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-display text-3xl text-white">ALL HIGHLIGHTS</h2>
+        <span class="text-xs text-gray-500">${others.length} clips</span>
+      </div>
+      <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+    </section>
+  `;
+  lucide.createIcons();
+  renderGrid(others);
+  bindCategoryFilter(others);
+  bindHeroParallax();
+}
+
+function renderHero(v) {
+  return `
+    <section class="relative rounded-2xl overflow-hidden mb-6 group" id="hero">
+      <div class="absolute inset-0">
+        <img id="heroImg" src="${esc(v.thumbnailUrl)}" alt="${esc(v.title)}" class="w-full h-full object-cover scale-105 transition-transform duration-700"
+             onerror="this.style.display='none'; this.parentElement.style.background='linear-gradient(135deg,#1A2118,#0A0F0D)';" />
+      </div>
+      <div class="absolute inset-0 hero-overlay"></div>
+      <div class="relative z-10 px-6 sm:px-10 py-12 sm:py-20 max-w-3xl">
+        <span class="league-badge inline-block px-3 py-1 rounded-md text-xs font-bold uppercase tracking-wider text-white"
+              style="background:${leagueMap[v.league]?.color || '#444'}; --glow:${leagueMap[v.league]?.glow || '#888'};">
+          ${esc(v.league || 'Match')} · Featured
+        </span>
+        <h1 class="font-display text-5xl sm:text-7xl text-white mt-4 leading-none">${esc(v.title)}</h1>
+        <p class="text-gray-300 mt-3 text-base sm:text-lg">${esc(v.teams || '')} ${v.date ? '· ' + fmtDate(v.date) : ''}</p>
+        <a href="#/watch/${encodeURIComponent(v.id)}"
+           class="magnetic inline-flex items-center gap-2 mt-6 bg-accent text-pitch font-bold px-6 py-3 rounded-lg hover:shadow-[0_0_24px_rgba(57,255,20,0.5)] transition-shadow">
+          <i data-lucide="play"></i> WATCH NOW
+        </a>
+      </div>
+    </section>
+  `;
+}
+
+function bindHeroParallax() {
+  const hero = $('#hero'); if (!hero) return;
+  const img = $('#heroImg'); if (!img) return;
+  hero.addEventListener('mousemove', (e) => {
+    const r = hero.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5;
+    const y = (e.clientY - r.top) / r.height - 0.5;
+    gsap.to(img, { x: x*20, y: y*14, scale: 1.06, duration: 0.6, ease: 'power2.out' });
+  });
+  hero.addEventListener('mouseleave', () => {
+    gsap.to(img, { x: 0, y: 0, scale: 1.05, duration: 0.8, ease: 'power3.out' });
+  });
+  // Magnetic button
+  const btn = hero.querySelector('.magnetic');
+  if (btn) {
+    btn.addEventListener('mousemove', (e) => {
+      const r = btn.getBoundingClientRect();
+      const x = e.clientX - r.left - r.width/2;
+      const y = e.clientY - r.top - r.height/2;
+      gsap.to(btn, { x: x*0.3, y: y*0.4, duration: 0.4, ease: 'power2.out' });
+    });
+    btn.addEventListener('mouseleave', () => gsap.to(btn, { x:0, y:0, duration: 0.5, ease: 'elastic.out(1,0.4)' }));
+  }
+}
+
+function renderCategoryFilter() {
+  const pills = [{ name: 'All', slug: 'all' }, ...LEAGUES.map(l => ({ name: l.name, slug: l.name }))];
+  return `
+    <div class="flex gap-2 overflow-x-auto no-scrollbar scroll-snap-x py-2" id="catFilter">
+      ${pills.map(p => `
+        <button data-cat="${esc(p.slug)}" class="pill flex-shrink-0 px-4 py-2 rounded-full text-sm border border-white/10 bg-raised/60 text-gray-300 hover:text-accent hover:border-accent/50 ${p.slug==='all'?'active':''}">
+          ${esc(p.name)}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function bindCategoryFilter(allVideos) {
+  const filter = $('#catFilter'); if (!filter) return;
+  filter.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-cat]'); if (!btn) return;
+    $$('.pill', filter).forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const cat = btn.dataset.cat;
+    const filtered = cat === 'all' ? allVideos : allVideos.filter(v => v.league === cat);
+    renderGrid(filtered, true);
+  });
+}
+
+function renderGrid(videos, animate=false) {
+  const grid = $('#grid'); if (!grid) return;
+  if (!videos || videos.length === 0) {
+    grid.innerHTML = renderEmptyState();
+    lucide.createIcons();
+    return;
+  }
+  grid.innerHTML = videos.map((v, i) => renderCard(v, i)).join('');
+  // Inject mid-grid ad after every 6th card
+  injectMidGridAds(grid);
+  lucide.createIcons();
+  // Staggered entrance
+  gsap.fromTo(grid.querySelectorAll('.video-card'),
+    { y: 30, opacity: 0 },
+    { y: 0, opacity: 1, duration: 0.5, ease: 'power3.out', stagger: 0.06, overwrite: true });
+}
+
+function injectMidGridAds(grid) {
+  const cards = grid.querySelectorAll('.video-card');
+  cards.forEach((card, i) => {
+    if ((i+1) % 6 === 0) {
+      const ad = document.createElement('div');
+      ad.className = 'sm:col-span-2 lg:col-span-3 my-2';
+      ad.innerHTML = `<div data-ad-key="mid-grid-${i+1}" class="ad-box bg-surface border border-white/5 rounded-lg flex items-center justify-center text-xs text-gray-500" style="height:90px;">Ad · 728×90 (mid-grid)</div>`;
+      card.parentNode.insertBefore(ad, card.nextSibling);
+    }
+  });
+}
+
+function renderCard(v, i=0) {
+  const lg = leagueMap[v.league] || { color:'#444', glow:'#888' };
+  const tags = Array.isArray(v.tags) ? v.tags.slice(0,3) : [];
+  return `
+    <article class="video-card relative rounded-xl overflow-hidden bg-surface border border-white/5 cursor-pointer group" data-id="${esc(v.id)}" onclick="goWatch('${esc(v.id)}')">
+      <div class="relative aspect-video overflow-hidden bg-raised">
+        <img src="${esc(v.thumbnailUrl)}" alt="${esc(v.title)}" loading="lazy"
+             class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+             onerror="this.style.display='none'; this.parentElement.style.background='linear-gradient(135deg,#1A2118,#0A0F0D)';" />
+        <div class="scan-line"></div>
+        <div class="absolute top-2 left-2">
+          <span class="league-badge inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider text-white"
+                style="background:${lg.color}; --glow:${lg.glow};">${esc(v.league || 'Match')}</span>
+        </div>
+        <div class="absolute bottom-2 right-2 bg-black/70 backdrop-blur px-2 py-0.5 rounded text-[10px] text-gray-200 flex items-center gap-1">
+          <i data-lucide="eye" style="width:12px;height:12px;"></i> ${v.views || 0}
+        </div>
+        <div class="play-icon-overlay absolute inset-0 flex items-center justify-center">
+          <div class="w-14 h-14 rounded-full bg-accent/90 text-pitch flex items-center justify-center shadow-[0_0_24px_rgba(57,255,20,0.6)]">
+            <i data-lucide="play" style="width:24px;height:24px;"></i>
+          </div>
+        </div>
+      </div>
+      <div class="p-3">
+        <h3 class="text-white font-semibold text-base leading-tight line-clamp-2">${esc(v.title)}</h3>
+        <p class="text-gray-400 text-xs mt-1">${esc(v.teams || '')} ${v.date ? '· ' + fmtDate(v.date) : ''}</p>
+        ${tags.length ? `<div class="flex flex-wrap gap-1 mt-2">${tags.map(t => `<span class="chip">#${esc(t)}</span>`).join('')}</div>` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function renderEmptyState() {
+  return `
+    <div class="col-span-full flex flex-col items-center justify-center py-16 text-center">
+      <div class="bouncing-ball mb-6"></div>
+      <h3 class="font-display text-3xl text-gray-300">No matches on the pitch</h3>
+      <p class="text-gray-500 mt-2 max-w-md">Be the first to score. Head to the admin dashboard and upload the first highlight clip.</p>
+      <a href="#/admin" class="mt-6 inline-flex items-center gap-2 bg-accent text-pitch font-bold px-5 py-2.5 rounded-lg">
+        <i data-lucide="plus"></i> Add First Highlight
+      </a>
+    </div>
+  `;
+}
+
+window.goWatch = (id) => { location.hash = '#/watch/' + encodeURIComponent(id); };
+
+/* ---------- Render: Watch ---------- */
+function renderWatch(id) {
+  const v = (state.videos || []).find(x => x.id === id);
+  const app = $('#app');
+  if (!v) {
+    app.innerHTML = `<div class="py-16 text-center text-gray-400">Highlight not found. <a href="#/" class="text-accent">Back home</a></div>`;
+    return;
+  }
+  // Increment views (debounced)
+  incrementViews(v);
+
+  const related = (state.videos || []).filter(x => x.id !== v.id && x.league === v.league).slice(0, 5);
+  const lg = leagueMap[v.league] || { color:'#444', glow:'#888' };
+  const tags = Array.isArray(v.tags) ? v.tags : [];
+
+  app.innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="lg:col-span-2">
+        <div class="iframe-wrap">
+          <iframe src="${esc(normalizeEmbedUrl(v.videoUrl))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+        </div>
+        <h1 class="font-display text-4xl text-white mt-4">${esc(v.title)}</h1>
+        <div class="flex flex-wrap items-center gap-3 mt-2">
+          <span class="league-badge inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider text-white"
+                style="background:${lg.color}; --glow:${lg.glow};">${esc(v.league || 'Match')}</span>
+          <span class="text-gray-400 text-sm">${esc(v.teams || '')}</span>
+          <span class="text-gray-600 text-sm">·</span>
+          <span class="text-gray-400 text-sm">${fmtDate(v.date)}</span>
+          <span class="text-gray-600 text-sm">·</span>
+          <span class="text-gray-400 text-sm flex items-center gap-1"><i data-lucide="eye" style="width:14px;height:14px;"></i> ${v.views || 0} views</span>
+        </div>
+        ${v.description ? `<p class="text-gray-300 mt-4 leading-relaxed">${esc(v.description)}</p>` : ''}
+        ${tags.length ? `<div class="flex flex-wrap gap-1 mt-4">${tags.map(t => `<span class="chip">#${esc(t)}</span>`).join('')}</div>` : ''}
+      </div>
+      <aside class="lg:col-span-1">
+        <!-- AD: Watch sidebar 300x250 -->
+        <div data-ad-key="watch-sidebar-300x250" class="ad-box bg-surface border border-white/5 rounded-lg flex items-center justify-center text-xs text-gray-500 mb-4" style="height:250px;">
+          Ad · 300×250
+        </div>
+        <h3 class="font-display text-2xl text-white mb-3">RELATED</h3>
+        <div class="space-y-3" id="relatedList">
+          ${related.length ? related.map(r => renderRelatedItem(r)).join('') : `<p class="text-gray-500 text-sm">No related highlights in this league yet.</p>`}
+        </div>
+      </aside>
+    </div>
+  `;
+  lucide.createIcons();
+  // Sidebar slide-in
+  gsap.fromTo('#relatedList > *', { x: 40, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: 'power3.out', stagger: 0.08 });
+  // Scroll into view
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderRelatedItem(v) {
+  const lg = leagueMap[v.league] || { color:'#444', glow:'#888' };
+  return `
+    <a href="#/watch/${encodeURIComponent(v.id)}" class="flex gap-3 p-2 rounded-lg hover:bg-raised transition-colors group">
+      <div class="w-32 aspect-video rounded overflow-hidden bg-raised flex-shrink-0">
+        <img src="${esc(v.thumbnailUrl)}" alt="" class="w-full h-full object-cover group-hover:scale-110 transition-transform"
+             onerror="this.style.display='none';" />
+      </div>
+      <div class="min-w-0">
+        <span class="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase text-white" style="background:${lg.color};">${esc(v.league || 'Match')}</span>
+        <h4 class="text-sm text-white font-medium leading-tight mt-1 line-clamp-2">${esc(v.title)}</h4>
+        <p class="text-gray-500 text-xs mt-0.5">${v.views || 0} views</p>
+      </div>
+    </a>
+  `;
+}
+
+function incrementViews(v) {
+  // Local immediate
+  v.views = (v.views || 0) + 1;
+  // Debounced remote
+  clearTimeout(incrementViews._t);
+  incrementViews._t = setTimeout(() => {
+    if (videosRef) {
+      videosRef.child(v.id).child('views').set(v.views).catch(e => console.warn('view update failed', e));
+    }
+  }, 800);
+}
+
+/* ---------- Render: Search ---------- */
+function renderSearch(q) {
+  const app = $('#app');
+  const query = (q || '').toLowerCase().trim();
+  const matches = (state.videos || []).filter(v => {
+    if (!query) return false;
+    const hay = [v.title, v.teams, v.league, v.description, (v.tags||[]).join(' ')].join(' ').toLowerCase();
+    return hay.includes(query);
+  });
+  app.innerHTML = `
+    <div class="mb-6">
+      <h2 class="font-display text-3xl text-white">SEARCH RESULTS</h2>
+      <p class="text-gray-400 mt-1">${query ? `${matches.length} match(es) for "${esc(q)}"` : 'Type in the search bar above.'}</p>
+    </div>
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+  `;
+  lucide.createIcons();
+  renderGrid(matches);
+}
+
+/* ---------- Render: Category ---------- */
+function renderCategory(slug) {
+  const app = $('#app');
+  const list = (state.videos || []).filter(v => v.league === slug);
+  const lg = leagueMap[slug] || { color:'#444', glow:'#888' };
+  app.innerHTML = `
+    <div class="mb-6">
+      <span class="league-badge inline-block px-3 py-1 rounded text-xs font-bold uppercase tracking-wider text-white" style="background:${lg.color}; --glow:${lg.glow};">${esc(slug)}</span>
+      <h2 class="font-display text-4xl text-white mt-3">${esc(slug).toUpperCase()}</h2>
+      <p class="text-gray-400 mt-1">${list.length} highlight(s)</p>
+    </div>
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+  `;
+  lucide.createIcons();
+  renderGrid(list);
+}
+
+/* ---------- Render: Admin Login ---------- */
+function renderAdminLogin() {
+  const app = $('#app');
+  app.innerHTML = `
+    <div class="min-h-[70vh] flex items-center justify-center px-4">
+      <div id="loginCard" class="bg-surface border border-accent/20 rounded-2xl p-8 max-w-sm w-full shadow-[0_0_60px_rgba(57,255,20,0.15)] relative overflow-hidden">
+        <div class="absolute -top-20 -right-20 w-48 h-48 rounded-full bg-accent/10 blur-3xl pointer-events-none"></div>
+        <div class="text-center mb-6 relative">
+          <div id="lockIcon" class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-raised border border-accent/40 text-accent mb-3 shadow-[0_0_24px_rgba(57,255,20,0.25)]">
+            <i data-lucide="lock"></i>
+          </div>
+          <h2 class="font-display text-3xl text-white tracking-wide">ADMIN ACCESS</h2>
+          <p class="text-gray-500 text-sm mt-1">Enter password to manage highlights</p>
+        </div>
+        <form id="loginForm" class="space-y-4 relative">
+          <input id="pw" type="password" autofocus placeholder="Password"
+                 class="w-full bg-raised border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:border-accent/50" />
+          <button type="submit" class="w-full bg-accent text-pitch font-bold py-3 rounded-lg hover:shadow-[0_0_28px_rgba(57,255,20,0.55)] hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2">
+            <i data-lucide="unlock" style="width:18px;height:18px;"></i> UNLOCK
+          </button>
+        </form>
+        <div class="mt-5 p-3 rounded-lg bg-raised/60 border border-white/5 text-[11px] text-gray-400 leading-relaxed">
+          <span class="text-accent font-semibold">Tip:</span> You can also long-press the <span class="text-white font-semibold">STRIKER</span> logo (top-left) for 5 seconds to open this page.
+        </div>
+        <a href="#/" class="block text-center text-gray-500 text-sm mt-4 hover:text-accent transition-colors">← Back to site</a>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+  $('#loginForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const val = $('#pw').value;
+    if (val === ADMIN_PASSWORD) {
+      state.adminAuthed = true;
+      gsap.to('#lockIcon', { rotate: 360, duration: 0.6, ease: 'power2.inOut' });
+      setTimeout(() => {
+        $('#lockIcon').innerHTML = '<i data-lucide="unlock"></i>';
+        lucide.createIcons();
+        gsap.fromTo('#lockIcon', { scale: 0.5 }, { scale: 1, duration: 0.4, ease: 'back.out(2)' });
+      }, 300);
+      setTimeout(() => { location.hash = '#/admin/dashboard'; }, 900);
+    } else {
+      const card = $('#loginCard');
+      card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+      showToast('Wrong password', 'danger');
+    }
+  });
+}
+
+/* ---------- Render: Admin Dashboard ---------- */
+function renderAdminDashboard() {
+  const app = $('#app');
+  const total = state.videos.length;
+  const totalViews = state.videos.reduce((s,v) => s + (v.views||0), 0);
+  const lastAdded = state.videos[0];
+  app.innerHTML = `
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="font-display text-4xl text-white">DASHBOARD</h2>
+      <a href="#/" class="text-sm text-gray-400 hover:text-accent flex items-center gap-1"><i data-lucide="external-link"></i> View site</a>
+    </div>
+
+    <!-- STATS -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+      <div class="bg-surface border border-accent/15 rounded-xl p-5 relative overflow-hidden hover:border-accent/35 transition-colors">
+        <div class="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-accent/8 blur-2xl pointer-events-none"></div>
+        <div class="flex items-center justify-between relative">
+          <div class="text-gray-400 text-xs uppercase tracking-wider">Total Videos</div>
+          <i data-lucide="clapperboard" class="text-accent/70" style="width:18px;height:18px;"></i>
+        </div>
+        <div class="font-display text-5xl text-accent mt-2 relative" data-stat="${total}" id="statTotal">0</div>
+      </div>
+      <div class="bg-surface border border-white/10 rounded-xl p-5 relative overflow-hidden hover:border-white/25 transition-colors">
+        <div class="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/5 blur-2xl pointer-events-none"></div>
+        <div class="flex items-center justify-between relative">
+          <div class="text-gray-400 text-xs uppercase tracking-wider">Total Views</div>
+          <i data-lucide="eye" class="text-white/60" style="width:18px;height:18px;"></i>
+        </div>
+        <div class="font-display text-5xl text-white mt-2 relative" data-stat="${totalViews}" id="statViews">0</div>
+      </div>
+      <div class="bg-surface border border-white/10 rounded-xl p-5 relative overflow-hidden hover:border-white/25 transition-colors">
+        <div class="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-purple-500/10 blur-2xl pointer-events-none"></div>
+        <div class="flex items-center justify-between relative">
+          <div class="text-gray-400 text-xs uppercase tracking-wider">Last Added</div>
+          <i data-lucide="clock" class="text-purple-300/70" style="width:18px;height:18px;"></i>
+        </div>
+        <div class="text-white text-sm mt-2 font-medium line-clamp-1">${lastAdded ? esc(lastAdded.title).slice(0,40) : '—'}</div>
+        <div class="text-gray-500 text-xs mt-1">${lastAdded ? timeAgo(lastAdded.createdAt) : ''}</div>
+      </div>
+    </div>
+
+    <!-- SPLIT PANE -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- TABLE -->
+      <div class="bg-surface border border-white/5 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-display text-2xl text-white">VIDEO TABLE</h3>
+          <button id="newVideoBtn" class="bg-accent text-pitch font-bold text-sm px-3 py-1.5 rounded-lg flex items-center gap-1">
+            <i data-lucide="plus" style="width:14px;height:14px;"></i> NEW
+          </button>
+        </div>
+        <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table class="w-full text-sm">
+            <thead class="text-gray-400 text-xs uppercase sticky top-0 bg-surface">
+              <tr>
+                <th class="text-left p-2 cursor-pointer" data-sort="title">Title ↕</th>
+                <th class="text-left p-2 cursor-pointer" data-sort="league">League ↕</th>
+                <th class="text-left p-2 cursor-pointer" data-sort="views">Views ↕</th>
+                <th class="text-right p-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="videoTbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- FORM -->
+      <div class="bg-surface border border-white/5 rounded-xl p-4">
+        <h3 class="font-display text-2xl text-white mb-3" id="formTitle">ADD VIDEO</h3>
+        <form id="videoForm" class="space-y-3">
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Title <span class="text-danger">*</span></label>
+            <input name="title" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="Man City 3-1 Arsenal" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Teams <span class="text-danger">*</span></label>
+            <input name="teams" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="Man City vs Arsenal" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">League</label>
+            <select name="league" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white">
+              ${LEAGUES.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Date</label>
+            <input name="date" type="date" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Video URL <span class="text-danger">*</span></label>
+            <input name="videoUrl" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="https://youtube.com/watch?v=..." />
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Thumbnail URL <span class="text-danger">*</span></label>
+            <input name="thumbnailUrl" id="thumbInput" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="https://...jpg" />
+            <div id="thumbPreview" class="mt-2 aspect-video rounded-lg overflow-hidden bg-raised border border-white/5 flex items-center justify-center text-xs text-gray-500">Live preview</div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Description</label>
+            <textarea name="description" rows="3" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="Brief recap..."></textarea>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase">Tags (comma-separated)</label>
+            <input name="tags" id="tagsInput" class="w-full bg-raised border border-white/10 rounded-lg px-3 py-2 text-white" placeholder="haaland, brace, epl" />
+            <div id="tagsChips" class="flex flex-wrap gap-1 mt-2"></div>
+          </div>
+          <div class="flex items-center justify-between pt-2">
+            <label class="text-sm text-gray-300">Featured</label>
+            <div id="featuredToggle" class="toggle" data-on="false"></div>
+            <input type="hidden" name="featured" value="false" />
+          </div>
+          <div class="flex gap-2 pt-3">
+            <button type="submit" class="flex-1 bg-accent text-pitch font-bold py-2.5 rounded-lg flex items-center justify-center gap-2">
+              <i data-lucide="upload" style="width:16px;height:16px;"></i> <span id="submitLabel">PUBLISH</span>
+            </button>
+            <button type="button" id="cancelEditBtn" class="hidden bg-raised text-gray-300 px-4 py-2.5 rounded-lg border border-white/10">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+
+  // Count-up stats
+  animateCount('#statTotal');
+  animateCount('#statViews');
+
+  // Render table
+  renderVideoTable();
+
+  // Form bindings
+  bindVideoForm();
+}
+
+function animateCount(sel) {
+  const el = $(sel); if (!el) return;
+  const target = parseInt(el.dataset.stat || '0', 10);
+  const obj = { v: 0 };
+  gsap.to(obj, { v: target, duration: 1.1, ease: 'power2.out', onUpdate: () => { el.textContent = Math.floor(obj.v).toLocaleString(); } });
+}
+
+let _sortKey = 'createdAt', _sortDir = -1;
+function renderVideoTable() {
+  const tbody = $('#videoTbody'); if (!tbody) return;
+  let list = [...state.videos];
+  list.sort((a,b) => {
+    const av = a[_sortKey] || 0, bv = b[_sortKey] || 0;
+    if (typeof av === 'string' && typeof bv === 'string') return _sortDir * av.localeCompare(bv);
+    return _sortDir * ((av > bv ? 1 : (av < bv ? -1 : 0)));
+  });
+  if (list.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-gray-500 py-6">No videos yet. Add the first one →</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(v => `
+    <tr class="border-t border-white/5 hover:bg-raised/50">
+      <td class="p-2">
+        <div class="text-white text-sm font-medium line-clamp-1">${esc(v.title)}</div>
+        <div class="text-gray-500 text-xs">${esc(v.teams || '')}</div>
+      </td>
+      <td class="p-2"><span class="chip">${esc(v.league || '')}</span></td>
+      <td class="p-2 text-gray-300">${v.views || 0}</td>
+      <td class="p-2 text-right whitespace-nowrap">
+        <button onclick="editVideo('${esc(v.id)}')" class="text-accent hover:scale-110 transition-transform p-1" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px;"></i></button>
+        <button onclick="deleteVideo('${esc(v.id)}')" class="text-danger hover:scale-110 transition-transform p-1" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></button>
+      </td>
+    </tr>
+  `).join('');
+  lucide.createIcons();
+
+  // Sort headers
+  $$('thead th[data-sort]').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.sort;
+      if (_sortKey === k) _sortDir *= -1; else { _sortKey = k; _sortDir = 1; }
+      renderVideoTable();
+    };
+  });
+}
+
+function bindVideoForm() {
+  const form = $('#videoForm');
+
+  // Thumbnail live preview
+  const thumbInput = $('#thumbInput');
+  thumbInput.addEventListener('input', () => {
+    const url = thumbInput.value.trim();
+    const prev = $('#thumbPreview');
+    if (url) {
+      prev.innerHTML = `<img src="${esc(url)}" class="w-full h-full object-cover" onerror="this.parentElement.innerHTML='<span class=\\'text-danger text-xs\\'>Invalid image URL</span>'" />`;
+    } else {
+      prev.innerHTML = 'Live preview';
+    }
+  });
+
+  // Tags chips
+  const tagsInput = $('#tagsInput');
+  tagsInput.addEventListener('input', () => {
+    const chips = tagsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+    $('#tagsChips').innerHTML = chips.map(t => `<span class="chip">#${esc(t)}</span>`).join('');
+  });
+
+  // Featured toggle
+  const tog = $('#featuredToggle');
+  tog.addEventListener('click', () => {
+    const on = tog.classList.toggle('on');
+    tog.dataset.on = on ? 'true' : 'false';
+    form.featured.value = on ? 'true' : 'false';
+  });
+
+  // New button
+  $('#newVideoBtn').addEventListener('click', resetForm);
+  $('#cancelEditBtn').addEventListener('click', resetForm);
+
+  // Submit
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const data = {
+      title: (fd.get('title') || '').toString().trim(),
+      teams: (fd.get('teams') || '').toString().trim(),
+      league: (fd.get('league') || 'Other').toString(),
+      date: (fd.get('date') || '').toString(),
+      videoUrl: (fd.get('videoUrl') || '').toString().trim(),
+      thumbnailUrl: (fd.get('thumbnailUrl') || '').toString().trim(),
+      description: (fd.get('description') || '').toString().trim(),
+      tags: (fd.get('tags') || '').toString().split(',').map(s => s.trim()).filter(Boolean),
+      featured: fd.get('featured') === 'true'
+    };
+
+    // Validation
+    if (data.title.length < 5) return showToast('Title must be at least 5 characters', 'danger');
+    if (!data.teams) return showToast('Teams is required', 'danger');
+    if (!data.videoUrl) return showToast('Video URL is required', 'danger');
+    if (!isValidEmbedUrl(data.videoUrl)) return showToast('Video URL must be a YouTube/Vimeo/Streamable/Dailymotion link', 'danger');
+    if (!data.thumbnailUrl) return showToast('Thumbnail URL is required', 'danger');
+
+    if (state.editingId) {
+      // Update
+      data.updatedAt = Date.now();
+      if (videosRef) {
+        videosRef.child(state.editingId).update(data).then(() => {
+          showToast('Updated!');
+          resetForm();
+        }).catch(e => showToast('Update failed: ' + e.message, 'danger'));
+      } else {
+        // Offline mode
+        const idx = state.videos.findIndex(v => v.id === state.editingId);
+        if (idx >= 0) state.videos[idx] = { ...state.videos[idx], ...data };
+        showToast('Updated (offline)!');
+        resetForm(); renderVideoTable();
+      }
+    } else {
+      // Create
+      const id = genId();
+      data.id = id;
+      data.views = 0;
+      data.createdAt = Date.now();
+      if (videosRef) {
+        videosRef.child(id).set(data).then(() => {
+          showToast('⚽ Uploaded to the pitch!');
+          fireConfetti();
+          resetForm();
+        }).catch(e => showToast('Upload failed: ' + e.message, 'danger'));
+      } else {
+        state.videos.unshift(data);
+        showToast('⚽ Uploaded (offline)!');
+        fireConfetti();
+        resetForm(); renderVideoTable(); updateTicker();
+      }
+    }
+  });
+}
+
+function resetForm() {
+  state.editingId = null;
+  const form = $('#videoForm'); if (!form) return;
+  form.reset();
+  $('#thumbPreview').innerHTML = 'Live preview';
+  $('#tagsChips').innerHTML = '';
+  $('#featuredToggle').classList.remove('on');
+  $('#featuredToggle').dataset.on = 'false';
+  form.featured.value = 'false';
+  $('#formTitle').textContent = 'ADD VIDEO';
+  $('#submitLabel').textContent = 'PUBLISH';
+  $('#cancelEditBtn').classList.add('hidden');
+}
+
+window.editVideo = (id) => {
+  const v = state.videos.find(x => x.id === id); if (!v) return;
+  state.editingId = id;
+  const form = $('#videoForm');
+  form.title.value = v.title || '';
+  form.teams.value = v.teams || '';
+  form.league.value = v.league || 'Other';
+  form.date.value = v.date || '';
+  form.videoUrl.value = v.videoUrl || '';
+  form.thumbnailUrl.value = v.thumbnailUrl || '';
+  form.description.value = v.description || '';
+  form.tags.value = (v.tags || []).join(', ');
+  form.featured.value = v.featured ? 'true' : 'false';
+  const tog = $('#featuredToggle');
+  if (v.featured) { tog.classList.add('on'); tog.dataset.on='true'; } else { tog.classList.remove('on'); tog.dataset.on='false'; }
+  // Trigger previews
+  $('#thumbInput').dispatchEvent(new Event('input'));
+  $('#tagsInput').dispatchEvent(new Event('input'));
+  $('#formTitle').textContent = 'EDIT VIDEO';
+  $('#submitLabel').textContent = 'UPDATE';
+  $('#cancelEditBtn').classList.remove('hidden');
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.deleteVideo = (id) => {
+  const v = state.videos.find(x => x.id === id); if (!v) return;
+  showDeleteModal(v);
+};
+
+function showDeleteModal(v) {
+  const modal = document.createElement('div');
+  modal.id = 'deleteModal';
+  modal.className = 'fixed inset-0 z-[150] flex items-center justify-center p-4';
+  modal.innerHTML = `
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" data-close></div>
+    <div class="modal-pop relative bg-surface border border-danger/40 rounded-2xl p-6 max-w-md w-full shadow-[0_0_40px_rgba(255,59,59,0.3)]">
+      <div class="flex items-center gap-3 mb-3">
+        <div class="w-12 h-12 rounded-full bg-danger/15 text-danger flex items-center justify-center"><i data-lucide="alert-triangle"></i></div>
+        <h3 class="font-display text-2xl text-white">ARE YOU SURE?</h3>
+      </div>
+      <p class="text-gray-300 text-sm">This will permanently delete <span class="text-white font-semibold">"${esc(v.title)}"</span> from Firebase. This action cannot be undone.</p>
+      <div class="flex gap-2 mt-5">
+        <button id="confirmDelete" class="flex-1 bg-danger text-white font-bold py-2.5 rounded-lg">DELETE</button>
+        <button data-close class="flex-1 bg-raised text-gray-300 py-2.5 rounded-lg border border-white/10">CANCEL</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  lucide.createIcons();
+  // Screen shake
+  document.body.classList.add('screen-shake');
+  setTimeout(() => document.body.classList.remove('screen-shake'), 400);
+
+  modal.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => modal.remove()));
+  $('#confirmDelete').addEventListener('click', () => {
+    if (videosRef) {
+      videosRef.child(v.id).remove().then(() => {
+        showToast('Deleted');
+        modal.remove();
+        if (state.editingId === v.id) resetForm();
+      }).catch(e => showToast('Delete failed: ' + e.message, 'danger'));
+    } else {
+      state.videos = state.videos.filter(x => x.id !== v.id);
+      showToast('Deleted (offline)');
+      modal.remove(); renderVideoTable(); updateTicker();
+    }
+  });
+}
+
+/* ---------- Confetti ---------- */
+function fireConfetti() {
+  const canvas = $('#confetti-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const colors = ['#39FF14', '#00ffae', '#ffffff', '#7B2CBF', '#FF8C00'];
+  const parts = [];
+  for (let i = 0; i < 160; i++) {
+    parts.push({
+      x: window.innerWidth/2 + (Math.random()-0.5)*200,
+      y: window.innerHeight/2,
+      vx: (Math.random()-0.5)*16,
+      vy: (Math.random()-1)*14 - 4,
+      g: 0.4 + Math.random()*0.2,
+      size: 4 + Math.random()*5,
+      color: colors[Math.floor(Math.random()*colors.length)],
+      rot: Math.random()*Math.PI*2,
+      vr: (Math.random()-0.5)*0.3,
+      life: 0,
+      maxLife: 120 + Math.random()*40
+    });
+  }
+  cancelAnimationFrame(fireConfetti._raf);
+  function tick() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    parts.forEach(p => {
+      p.vy += p.g;
+      p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.life++;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size*0.6);
+      ctx.restore();
+    });
+    const alive = parts.filter(p => p.life < p.maxLife && p.y < canvas.height + 50);
+    if (alive.length > 0) {
+      fireConfetti._raf = requestAnimationFrame(tick);
+    } else {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+    }
+  }
+  tick();
+}
+window.addEventListener('resize', () => {
+  const c = $('#confetti-canvas'); if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
+});
+
+/* ---------- Search Wiring ---------- */
+function wireSearch() {
+  const input = $('#navSearch');
+  if (!input) return;
+  const debounced = debounce((val) => {
+    if (val.trim()) {
+      location.hash = '#/search?q=' + encodeURIComponent(val.trim());
+    }
+  }, 200);
+  input.addEventListener('input', (e) => debounced(e.target.value));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (e.target.value.trim()) location.hash = '#/search?q=' + encodeURIComponent(e.target.value.trim());
+    }
+  });
+}
+
+/* ---------- Brand Long-Press (5s) -> Admin ---------- */
+function wireBrandLongPress() {
+  const brand = $('#brand');
+  if (!brand) return;
+  const HOLD_MS = 5000;
+  let holdTimer = null;
+  let startTime = 0;
+  let triggered = false;
+  let progressTween = null;
+
+  const startHold = () => {
+    triggered = false;
+    startTime = Date.now();
+    brand.classList.add('holding');
+    const fill = brand.querySelector('.hold-fill');
+    if (fill) {
+      gsap.killTweensOf(fill);
+      fill.style.width = '0%';
+      progressTween = gsap.to(fill, { width: '100%', duration: HOLD_MS/1000, ease: 'linear' });
+    }
+    holdTimer = setTimeout(() => {
+      triggered = true;
+      brand.classList.remove('holding');
+      // Visual feedback pulse
+      gsap.timeline()
+        .to(brand, { scale: 1.12, duration: 0.18, ease: 'power2.out' })
+        .to(brand, { scale: 1.0,  duration: 0.32, ease: 'elastic.out(1, 0.4)' });
+      showToast('Opening Admin...');
+      // Reset fill
+      const f = brand.querySelector('.hold-fill');
+      if (f) { gsap.killTweensOf(f); gsap.to(f, { width: '0%', duration: 0.3 }); }
+      setTimeout(() => {
+        if (state.adminAuthed) {
+          location.hash = '#/admin/dashboard';
+        } else {
+          location.hash = '#/admin';
+        }
+      }, 450);
+    }, HOLD_MS);
+  };
+
+  const cancelHold = () => {
+    clearTimeout(holdTimer);
+    brand.classList.remove('holding');
+    const fill = brand.querySelector('.hold-fill');
+    if (fill) {
+      gsap.killTweensOf(fill);
+      gsap.to(fill, { width: '0%', duration: 0.3, ease: 'power2.out' });
+    }
+  };
+
+  const endHold = () => {
+    const elapsed = Date.now() - startTime;
+    cancelHold();
+    // Short tap -> go home
+    if (!triggered && elapsed < 400) {
+      location.hash = '#/';
+    }
+  };
+
+  // Mouse
+  brand.addEventListener('mousedown', (e) => { e.preventDefault(); startHold(); });
+  brand.addEventListener('mouseup',   endHold);
+  brand.addEventListener('mouseleave', cancelHold);
+
+  // Touch
+  brand.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); }, { passive: false });
+  brand.addEventListener('touchend',   endHold);
+  brand.addEventListener('touchcancel', cancelHold);
+
+  // Keyboard accessibility (Enter = go home; Shift+Enter = admin shortcut)
+  brand.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (e.shiftKey) {
+        location.hash = state.adminAuthed ? '#/admin/dashboard' : '#/admin';
+      } else {
+        location.hash = '#/';
+      }
+    }
+  });
+
+  // Prevent text selection / drag
+  brand.addEventListener('dragstart', e => e.preventDefault());
+  brand.addEventListener('selectstart', e => e.preventDefault());
+}
+
+/* ---------- Main Render Dispatcher ---------- */
+function render() {
+  if (!state.ready) return;
+  route();
+}
+
+/* ---------- Init ---------- */
+document.addEventListener('DOMContentLoaded', () => {
+  lucide.createIcons();
+  wireSearch();
+  wireBrandLongPress();
+  initFirebase();
+  // If Firebase offline, still trigger first render
+  setTimeout(() => { if (!state.ready) { state.ready = true; render(); } }, 800);
+});
+</script>
+
+<!-- Replace ad placeholders with real Adsterra scripts here.
+     Example:
+     <div data-ad-key="below-nav-728x90"><script src="...adsterra..."></script></div>
+-->
+</body>
+</html>
